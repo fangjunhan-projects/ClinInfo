@@ -18,6 +18,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # ClinicalTrials.gov API base URL
 CLINICAL_TRIALS_API_BASE = "https://clinicaltrials.gov/api/v2/studies"
 
+# openFDA API base URL
+OPENFDA_API_BASE = "https://api.fda.gov/drug/label.json"
+
 @tool
 def search_clinical_trials(
     condition: str,
@@ -273,6 +276,9 @@ def search_clinical_trials(
         print(f"[DEBUG API] Traceback: {traceback.format_exc()}")
         return error_msg
 
+
+
+
 @tool
 def search_drugs_fda(
     drug_name: Optional[str] = None,
@@ -309,8 +315,6 @@ def search_drugs_fda(
         - General search: search_term="diabetes medication"
     """
     try:
-        OPENFDA_API_BASE = "https://api.fda.gov/drug/label.json"
-        
         # Build search query
         search_parts = []
         
@@ -321,13 +325,10 @@ def search_drugs_fda(
         if product_type:
             search_parts.append(f'openfda.product_type:"{product_type}"')
         if drug_name:
-            # Search in both brand and generic names
             search_parts.append(f'(openfda.brand_name:"{drug_name}" OR openfda.generic_name:"{drug_name}")')
         if search_term:
-            # General search across multiple fields
             search_parts.append(f'"{search_term}"')
         
-        # If no specific search, return a helpful message
         if not search_parts:
             return "Please provide at least one search parameter: drug_name, brand_name, generic_name, or search_term."
         
@@ -336,33 +337,32 @@ def search_drugs_fda(
         # Build query parameters
         query_params = {
             "search": search_query,
-            "limit": min(max_results, 100)  # API max is 100
+            "limit": min(max_results, 100)
         }
-        
-        # Add API key if available (optional, but recommended for higher rate limits)
-        OPENFDA_API_KEY = os.getenv("OPENFDA_API_KEY")
-        if OPENFDA_API_KEY:
-            query_params["api_key"] = OPENFDA_API_KEY
         
         # Make API request
         full_url = f"{OPENFDA_API_BASE}?{urlencode(query_params)}"
-        print(f"[DEBUG openFDA] API Request URL: {full_url}")
+        print(f"[DEBUG API] Raw API Request URL:")
+        print(f"[DEBUG API] {full_url}")
+        print(f"[DEBUG API] Query parameters: {query_params}")
         
         response = requests.get(OPENFDA_API_BASE, params=query_params, timeout=10)
         response.raise_for_status()
         
         data = response.json()
+        print(f"[DEBUG API] Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
         
         # Check if we have results
-        results = data.get("results", [])
-        if not results or len(results) == 0:
+        all_results = data.get("results", [])
+        if not all_results or len(all_results) == 0:
             return f"No drug information found. Try a different search term or check the spelling."
         
         # Format the results
         formatted_results = []
-        formatted_results.append(f"Found {len(results)} drug result(s):\n")
+        total_count = data.get("meta", {}).get("results", {}).get("total", len(all_results))
+        formatted_results.append(f"Found {len(all_results)} drug result(s) (of {total_count} total):\n")
         
-        for i, drug in enumerate(results, 1):
+        for i, drug in enumerate(all_results, 1):
             try:
                 openfda = drug.get("openfda", {})
                 brand_names = openfda.get("brand_name", [])
@@ -370,7 +370,6 @@ def search_drugs_fda(
                 product_types = openfda.get("product_type", [])
                 route = openfda.get("route", [])
                 
-                # Get label information
                 purpose = drug.get("purpose", [])
                 indications = drug.get("indications_and_usage", [])
                 warnings = drug.get("warnings", [])
@@ -390,7 +389,7 @@ def search_drugs_fda(
                 
                 if boxed_warning:
                     warning_text = boxed_warning[0][:300] if len(boxed_warning[0]) > 300 else boxed_warning[0]
-                    formatted_results.append(f"   ⚠️ BOXED WARNING: {warning_text}...")
+                    formatted_results.append(f"   BOXED WARNING: {warning_text}...")
                 
                 if purpose:
                     purpose_text = purpose[0][:200] if len(purpose[0]) > 200 else purpose[0]
@@ -410,7 +409,7 @@ def search_drugs_fda(
                 formatted_results.append("")
                 
             except Exception as e:
-                print(f"[DEBUG openFDA] Error processing drug {i}: {str(e)}")
+                print(f"[DEBUG API] Error processing drug {i}: {str(e)}")
                 formatted_results.append(f"{i}. [Error processing drug data]")
                 formatted_results.append("")
         
@@ -418,13 +417,18 @@ def search_drugs_fda(
     
     except requests.exceptions.RequestException as e:
         error_msg = f"Error fetching drug information from openFDA: {str(e)}"
-        print(f"[DEBUG openFDA] Request error: {error_msg}")
+        print(f"[DEBUG API] Request error: {error_msg}")
+        return error_msg
+    except KeyError as e:
+        error_msg = f"Error processing API response - missing key: {str(e)}"
+        print(f"[DEBUG API] KeyError: {error_msg}")
+        print(f"[DEBUG API] Response data structure: {list(data.keys()) if 'data' in locals() and isinstance(data, dict) else 'N/A'}")
         return error_msg
     except Exception as e:
         error_msg = f"Error processing drug information: {type(e).__name__}: {str(e)}"
-        print(f"[DEBUG openFDA] General error: {error_msg}")
+        print(f"[DEBUG API] General error: {error_msg}")
         import traceback
-        print(f"[DEBUG openFDA] Traceback: {traceback.format_exc()}")
+        print(f"[DEBUG API] Traceback: {traceback.format_exc()}")
         return error_msg
 
 # Initialize LLM with tools
